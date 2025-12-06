@@ -1,0 +1,681 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  signInWithCustomToken
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  serverTimestamp,
+  orderBy,
+  deleteDoc,
+  doc
+} from 'firebase/firestore';
+import { 
+  Trophy, 
+  Timer, 
+  Keyboard, 
+  User, 
+  LogOut, 
+  ShieldCheck, 
+  Activity, 
+  RefreshCw,
+  Trash2,
+  Medal
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- Data Kata-Kata (Indonesia Common Words) ---
+const WORDS_ID = [
+  "saya", "adalah", "seorang", "pelajar", "yang", "ingin", "menjadi", "juara",
+  "dalam", "lomba", "mengetik", "cepat", "ini", "sekolah", "menengah", "pertama",
+  "buku", "guru", "ilmu", "belajar", "membaca", "menulis", "komputer", "teknologi",
+  "indonesia", "merdeka", "tanah", "air", "udara", "api", "bumi", "langit",
+  "makan", "minum", "tidur", "lari", "jalan", "lompat", "duduk", "berdiri",
+  "pagi", "siang", "sore", "malam", "hari", "minggu", "bulan", "tahun",
+  "satu", "dua", "tiga", "empat", "lima", "sepuluh", "ratus", "ribu",
+  "besar", "kecil", "tinggi", "rendah", "panjang", "pendek", "jauh", "dekat",
+  "bagus", "buruk", "cantik", "ganteng", "pintar", "cerdas", "rajin", "malas",
+  "mereka", "kita", "kamu", "dia", "kalian", "beliau", "siapa", "dimana",
+  "kapan", "mengapa", "bagaimana", "jika", "tapi", "atau", "dan", "karena",
+  "rumah", "sepatu", "baju", "celana", "tas", "meja", "kursi", "papan",
+  "pohon", "bunga", "daun", "buah", "hewan", "kucing", "anjing", "burung"
+];
+
+// --- Utility: Shuffle Array ---
+const shuffleArray = (array) => {
+  const newArray = [...array];
+  for (let i = newArray.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+  }
+  return newArray;
+};
+
+// --- Main Component ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('landing'); // landing, student-login, test, result, admin-login, dashboard
+  const [studentInfo, setStudentInfo] = useState({ name: '', classRoom: '' });
+  const [testResults, setTestResults] = useState([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // --- Auth Init ---
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // --- Fetch Data (Realtime Leaderboard) ---
+  useEffect(() => {
+    if (!user) return;
+    
+    // Using a simple query and sorting in client to avoid complex index requirements
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'typing_scores'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      // Sort client-side: WPM desc, then Accuracy desc
+      data.sort((a, b) => {
+        if (b.wpm !== a.wpm) return b.wpm - a.wpm;
+        return b.accuracy - a.accuracy;
+      });
+      setTestResults(data);
+    }, (error) => {
+      console.error("Error fetching data:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Views Navigation ---
+  const goHome = () => setView('landing');
+  const startStudentFlow = () => setView('student-login');
+  const startAdminFlow = () => setView('admin-login');
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-cyan-500 selection:text-white">
+      {/* Header */}
+      <nav className="border-b border-slate-800 bg-slate-950/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={goHome}>
+            <Keyboard className="w-6 h-6 text-cyan-400" />
+            <span className="font-bold text-xl tracking-tight">Ketik<span className="text-cyan-400">Cepat</span> SMP</span>
+          </div>
+          <div className="flex items-center gap-4">
+            {view !== 'landing' && (
+              <button onClick={goHome} className="text-sm text-slate-400 hover:text-white transition">
+                Kembali ke Menu
+              </button>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        {view === 'landing' && <LandingView onStudent={startStudentFlow} onAdmin={startAdminFlow} results={testResults} />}
+        {view === 'student-login' && <StudentLogin setInfo={setStudentInfo} setView={setView} />}
+        {view === 'test' && <TypingTest studentInfo={studentInfo} setView={setView} user={user} />}
+        {view === 'admin-login' && <AdminLogin setIsAdmin={setIsAdmin} setView={setView} />}
+        {view === 'dashboard' && <AdminDashboard results={testResults} setView={setView} />}
+      </main>
+    </div>
+  );
+}
+
+// --- Sub-Components ---
+
+function LandingView({ onStudent, onAdmin, results }) {
+  const top3 = results.slice(0, 3);
+
+  return (
+    <div className="flex flex-col items-center justify-center space-y-12 animate-fade-in">
+      <div className="text-center space-y-4 max-w-2xl mt-8">
+        <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 pb-2">
+          Lomba Mengetik Cepat
+        </h1>
+        <p className="text-xl text-slate-400">
+          Uji kecepatan jari-jarimu dan jadilah juara mengetik se-sekolah!
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl">
+        <div 
+          onClick={onStudent}
+          className="group relative overflow-hidden bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-cyan-500/50 transition-all cursor-pointer hover:shadow-2xl hover:shadow-cyan-500/10"
+        >
+          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition">
+            <Keyboard size={120} />
+          </div>
+          <h3 className="text-2xl font-bold mb-2 flex items-center gap-2">
+            <User className="text-cyan-400" />
+            Area Peserta
+          </h3>
+          <p className="text-slate-400">Masuk untuk mulai tes mengetik. Durasi 60 detik.</p>
+          <button className="mt-6 px-6 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-semibold transition w-full">
+            Mulai Tes
+          </button>
+        </div>
+
+        <div 
+          onClick={onAdmin}
+          className="group relative overflow-hidden bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-purple-500/50 transition-all cursor-pointer hover:shadow-2xl hover:shadow-purple-500/10"
+        >
+          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition">
+            <ShieldCheck size={120} />
+          </div>
+          <h3 className="text-2xl font-bold mb-2 flex items-center gap-2">
+            <ShieldCheck className="text-purple-400" />
+            Area Admin
+          </h3>
+          <p className="text-slate-400">Pantau hasil siswa dan kelola leaderboard.</p>
+          <button className="mt-6 px-6 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-semibold transition w-full">
+            Masuk Admin
+          </button>
+        </div>
+      </div>
+
+      {/* Mini Leaderboard Preview */}
+      {top3.length > 0 && (
+        <div className="w-full max-w-2xl bg-slate-800/50 rounded-xl p-6 border border-slate-700 mt-8">
+          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Trophy className="text-yellow-400" /> Top 3 Sementara
+          </h3>
+          <div className="space-y-3">
+            {top3.map((r, idx) => (
+              <div key={r.id} className="flex items-center justify-between bg-slate-800 p-3 rounded-lg border border-slate-700">
+                <div className="flex items-center gap-3">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
+                    idx === 0 ? 'bg-yellow-500/20 text-yellow-500' : 
+                    idx === 1 ? 'bg-gray-400/20 text-gray-400' : 
+                    'bg-amber-700/20 text-amber-700'
+                  }`}>
+                    {idx + 1}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-white">{r.name}</div>
+                    <div className="text-xs text-slate-400">{r.class}</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-cyan-400">{r.wpm} <span className="text-sm text-slate-500">WPM</span></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StudentLogin({ setInfo, setView }) {
+  const [name, setName] = useState('');
+  const [cls, setCls] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (name.trim() && cls.trim()) {
+      setInfo({ name: name.trim(), classRoom: cls.trim() });
+      setView('test');
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <form onSubmit={handleSubmit} className="w-full max-w-md bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-xl space-y-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-white">Data Peserta</h2>
+          <p className="text-slate-400 text-sm mt-1">Isi data diri sebelum memulai tes</p>
+        </div>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-1">Nama Lengkap</label>
+            <input 
+              type="text" 
+              required
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-cyan-500 transition text-white"
+              placeholder="Contoh: Budi Santoso"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-1">Kelas</label>
+            <input 
+              type="text" 
+              required
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-cyan-500 transition text-white"
+              placeholder="Contoh: 8A"
+              value={cls}
+              onChange={(e) => setCls(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition transform active:scale-95">
+          Lanjut ke Tes
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function TypingTest({ studentInfo, setView, user }) {
+  const [words, setWords] = useState([]);
+  const [currWordIndex, setCurrWordIndex] = useState(0);
+  const [currInput, setCurrInput] = useState('');
+  const [correctWords, setCorrectWords] = useState(0);
+  const [incorrectWords, setIncorrectWords] = useState(0);
+  const [status, setStatus] = useState('waiting'); // waiting, started, finished
+  const [timeLeft, setTimeLeft] = useState(60);
+  const [results, setResults] = useState(null);
+  
+  const inputRef = useRef(null);
+  const testContainerRef = useRef(null);
+
+  // Initialize words
+  useEffect(() => {
+    // Generate 200 random words
+    const randomWords = [];
+    for(let i=0; i<200; i++) {
+      randomWords.push(WORDS_ID[Math.floor(Math.random() * WORDS_ID.length)]);
+    }
+    setWords(randomWords);
+    if(inputRef.current) inputRef.current.focus();
+  }, []);
+
+  // Timer
+  useEffect(() => {
+    let interval = null;
+    if (status === 'started' && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (timeLeft === 0 && status === 'started') {
+      finishTest();
+    }
+    return () => clearInterval(interval);
+  }, [status, timeLeft]);
+
+  const startTest = () => {
+    if (status === 'waiting') {
+      setStatus('started');
+    }
+  };
+
+  const handleInput = (e) => {
+    if (status === 'finished') return;
+    if (status === 'waiting') startTest();
+
+    const value = e.target.value;
+    
+    // Check for space
+    if (value.endsWith(' ')) {
+      const wordToMatch = words[currWordIndex];
+      const typedWord = value.trim();
+
+      if (typedWord === wordToMatch) {
+        setCorrectWords(prev => prev + 1);
+      } else {
+        setIncorrectWords(prev => prev + 1);
+      }
+
+      setCurrWordIndex(prev => prev + 1);
+      setCurrInput('');
+      
+      // Auto scroll logic (simplified)
+      if (currWordIndex > 0 && currWordIndex % 5 === 0) {
+         // Logic to scroll lines could go here, but using a flex wrap with fixed height and overflow hidden is easier
+         // For this simple version, we'll just keep the active word in view via CSS logic later or let it flow
+      }
+      
+    } else {
+      setCurrInput(value);
+    }
+  };
+
+  const finishTest = async () => {
+    setStatus('finished');
+    const finalWpm = correctWords; // Simplification: Correct words per minute
+    // Calculate accuracy
+    const totalAttempted = correctWords + incorrectWords;
+    const accuracy = totalAttempted === 0 ? 0 : Math.round((correctWords / totalAttempted) * 100);
+
+    const resultData = {
+      wpm: finalWpm,
+      accuracy: accuracy,
+      correct: correctWords,
+      wrong: incorrectWords,
+      name: studentInfo.name,
+      class: studentInfo.classRoom
+    };
+    
+    setResults(resultData);
+
+    // Save to Firebase
+    if (user) {
+      try {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'typing_scores'), {
+          ...resultData,
+          timestamp: serverTimestamp(),
+          userId: user.uid
+        });
+      } catch (err) {
+        console.error("Failed to save score", err);
+      }
+    }
+  };
+
+  // Calculate current word position for auto-scrolling visual
+  // We will slice the array to show only relevant lines
+  const visibleWordsStart = Math.max(0, currWordIndex - 10);
+  const visibleWordsEnd = visibleWordsStart + 40;
+  const visibleWords = words.slice(visibleWordsStart, visibleWordsEnd);
+
+  if (status === 'finished' && results) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-fade-in">
+        <div className="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl text-center max-w-lg w-full">
+          <Medal className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+          <h2 className="text-3xl font-bold text-white mb-2">Tes Selesai!</h2>
+          <p className="text-slate-400 mb-8">Hasilmu telah disimpan.</p>
+          
+          <div className="grid grid-cols-2 gap-4 mb-8">
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+              <div className="text-4xl font-extrabold text-cyan-400">{results.wpm}</div>
+              <div className="text-sm text-slate-500 uppercase font-bold tracking-wider">WPM</div>
+            </div>
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+              <div className="text-4xl font-extrabold text-purple-400">{results.accuracy}%</div>
+              <div className="text-sm text-slate-500 uppercase font-bold tracking-wider">Akurasi</div>
+            </div>
+          </div>
+           
+           <div className="flex justify-center gap-6 text-sm text-slate-400">
+             <span>Benar: <b className="text-green-400">{results.correct}</b></span>
+             <span>Salah: <b className="text-red-400">{results.wrong}</b></span>
+           </div>
+
+           <button onClick={() => setView('landing')} className="mt-8 w-full bg-slate-700 hover:bg-slate-600 py-3 rounded-lg font-semibold transition">
+             Kembali ke Beranda
+           </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto mt-8">
+      {/* Header Info */}
+      <div className="flex justify-between items-end mb-6 px-2">
+         <div>
+            <h2 className="text-xl font-bold text-white">{studentInfo.name}</h2>
+            <span className="text-slate-400 text-sm">Kelas {studentInfo.classRoom}</span>
+         </div>
+         <div className="flex items-center gap-3 bg-slate-800 px-4 py-2 rounded-lg border border-slate-700">
+            <Timer className={`w-5 h-5 ${timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-cyan-400'}`} />
+            <span className="text-2xl font-mono font-bold text-white">{timeLeft}s</span>
+         </div>
+      </div>
+
+      {/* Typing Area */}
+      <div 
+        className="relative bg-slate-800 rounded-2xl p-8 min-h-[200px] border border-slate-700 shadow-inner flex flex-wrap content-start gap-2 text-xl md:text-2xl leading-relaxed select-none mb-8"
+        onClick={() => inputRef.current && inputRef.current.focus()}
+      >
+        <div className="absolute top-4 right-4 text-xs text-slate-500 uppercase font-bold tracking-widest opacity-50 pointer-events-none">
+            Simulasi 10FastFingers
+        </div>
+
+        {/* Mask Overlay for Focus */}
+        <div className={`absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-10 flex items-center justify-center rounded-2xl transition-opacity duration-300 ${status !== 'waiting' ? 'opacity-0 pointer-events-none' : 'opacity-100 cursor-pointer'}`}>
+            <div className="text-center">
+                <p className="text-white font-bold text-lg mb-2">Klik di sini untuk mulai</p>
+                <p className="text-slate-400 text-sm">Timer mulai saat kamu mengetik</p>
+            </div>
+        </div>
+
+        {/* Word Renderer */}
+        {visibleWords.map((word, idx) => {
+            const actualIndex = visibleWordsStart + idx;
+            let className = "px-1.5 py-1 rounded transition-colors duration-100 ";
+            
+            if (actualIndex === currWordIndex) {
+                className += "bg-cyan-500/20 text-cyan-400 underline decoration-2 decoration-cyan-500 underline-offset-4"; // Active
+                // Check current typing correctness for styling active word
+                if (currInput && !word.startsWith(currInput)) {
+                     className += " bg-red-500/20 text-red-400 decoration-red-500";
+                }
+            } else if (actualIndex < currWordIndex) {
+                 // Already typed (we don't strictly track correctness per word in history for visual simplicity here, just gray out or color if we tracked history)
+                 // Ideally we'd store a history array of boolean correct/incorrect.
+                 // For this simple version, assume passed words are "done".
+                 className += "text-slate-600";
+            } else {
+                className += "text-slate-300";
+            }
+
+            return <span key={actualIndex} className={className}>{word}</span>
+        })}
+      </div>
+
+      {/* Input Field */}
+      <div className="relative">
+        <input
+            ref={inputRef}
+            type="text"
+            className="w-full bg-slate-900 border border-slate-700 text-slate-100 text-xl px-6 py-4 rounded-xl focus:outline-none focus:border-cyan-500 transition shadow-lg"
+            placeholder={status === 'waiting' ? "Mulai mengetik..." : ""}
+            value={currInput}
+            onChange={handleInput}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck="false"
+        />
+        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex gap-4">
+             <button onClick={() => window.location.reload()} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition" title="Restart">
+                <RefreshCw size={20} />
+             </button>
+        </div>
+      </div>
+      
+      <div className="mt-4 text-center text-slate-500 text-sm">
+        Tekan <kbd className="bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 border border-slate-600">Spasi</kbd> untuk pindah ke kata berikutnya.
+      </div>
+    </div>
+  );
+}
+
+function AdminLogin({ setIsAdmin, setView }) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState(false);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    // Simple PIN for demo purposes. In production, use Firebase Auth Email/Password
+    if (pin === '1234') { // HARDCODED ADMIN PIN
+      setIsAdmin(true);
+      setView('dashboard');
+    } else {
+      setError(true);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <form onSubmit={handleLogin} className="w-full max-w-sm bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-xl">
+        <div className="text-center mb-6">
+          <ShieldCheck className="w-12 h-12 text-purple-500 mx-auto mb-3" />
+          <h2 className="text-2xl font-bold text-white">Akses Admin</h2>
+        </div>
+        
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-slate-400 mb-1">PIN Keamanan</label>
+          <input 
+            type="password" 
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-center tracking-widest text-xl focus:outline-none focus:border-purple-500 transition text-white"
+            placeholder="••••"
+            value={pin}
+            onChange={(e) => { setPin(e.target.value); setError(false); }}
+            maxLength={4}
+          />
+          {error && <p className="text-red-400 text-sm mt-2 text-center">PIN Salah (Coba: 1234)</p>}
+        </div>
+
+        <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-lg transition">
+          Masuk Dashboard
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function AdminDashboard({ results, setView }) {
+  // Stats
+  const totalStudents = results.length;
+  const avgWpm = totalStudents > 0 ? Math.round(results.reduce((acc, curr) => acc + curr.wpm, 0) / totalStudents) : 0;
+  const topScore = totalStudents > 0 ? Math.max(...results.map(r => r.wpm)) : 0;
+
+  const handleDelete = async (id) => {
+    if (confirm('Yakin ingin menghapus data ini?')) {
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'typing_scores', id));
+      } catch (e) {
+        console.error("Error delete", e);
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-fade-in">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white flex items-center gap-2">
+            <Activity className="text-purple-400" /> Admin Dashboard
+          </h1>
+          <p className="text-slate-400">Rekapitulasi Hasil Lomba Mengetik</p>
+        </div>
+        <button 
+          onClick={() => setView('landing')}
+          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-4 py-2 rounded-lg flex items-center gap-2 transition"
+        >
+          <LogOut size={16} /> Logout
+        </button>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+          <div className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">Total Peserta</div>
+          <div className="text-4xl font-extrabold text-white">{totalStudents}</div>
+        </div>
+        <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+          <div className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">Rata-Rata WPM</div>
+          <div className="text-4xl font-extrabold text-cyan-400">{avgWpm}</div>
+        </div>
+        <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+          <div className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">Rekor Tertinggi</div>
+          <div className="text-4xl font-extrabold text-yellow-400">{topScore} <span className="text-lg text-slate-500">WPM</span></div>
+        </div>
+      </div>
+
+      {/* Leaderboard Table */}
+      <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-xl">
+        <div className="p-6 border-b border-slate-700 flex justify-between items-center">
+          <h3 className="text-xl font-bold text-white flex items-center gap-2">
+            <Trophy className="text-yellow-500" /> Peringkat 10 Besar & Data Lengkap
+          </h3>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-slate-900/50 text-slate-400 text-sm uppercase">
+                <th className="p-4 font-bold text-center w-16">#</th>
+                <th className="p-4 font-bold">Nama Siswa</th>
+                <th className="p-4 font-bold">Kelas</th>
+                <th className="p-4 font-bold text-center">WPM</th>
+                <th className="p-4 font-bold text-center">Akurasi</th>
+                <th className="p-4 font-bold text-center">Waktu</th>
+                <th className="p-4 font-bold text-center">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-700">
+              {results.length === 0 ? (
+                 <tr><td colSpan="7" className="p-8 text-center text-slate-500">Belum ada data masuk.</td></tr>
+              ) : (
+                results.map((row, index) => (
+                  <tr key={row.id} className={`hover:bg-slate-700/50 transition ${index < 3 ? 'bg-slate-700/20' : ''}`}>
+                    <td className="p-4 text-center font-mono">
+                      {index + 1 <= 3 ? (
+                        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                          index === 0 ? 'bg-yellow-500 text-black' :
+                          index === 1 ? 'bg-gray-400 text-black' :
+                          'bg-amber-700 text-white'
+                        }`}>
+                          {index + 1}
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">{index + 1}</span>
+                      )}
+                    </td>
+                    <td className="p-4 font-semibold text-white">{row.name}</td>
+                    <td className="p-4 text-slate-300">{row.class}</td>
+                    <td className="p-4 text-center font-bold text-cyan-400 text-lg">{row.wpm}</td>
+                    <td className="p-4 text-center">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${
+                        row.accuracy >= 90 ? 'bg-green-500/20 text-green-400' :
+                        row.accuracy >= 70 ? 'bg-yellow-500/20 text-yellow-400' :
+                        'bg-red-500/20 text-red-400'
+                      }`}>
+                        {row.accuracy}%
+                      </span>
+                    </td>
+                    <td className="p-4 text-center text-slate-500 text-sm">
+                      {row.timestamp ? new Date(row.timestamp.seconds * 1000).toLocaleTimeString() : '-'}
+                    </td>
+                    <td className="p-4 text-center">
+                      <button 
+                        onClick={() => handleDelete(row.id)}
+                        className="text-slate-500 hover:text-red-400 transition p-1"
+                        title="Hapus Data"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
